@@ -349,7 +349,7 @@ HRESULT spawn_with_pseudo_console(COORD size)
           }
 
           if( 1 ){ // command test code
-            const char cmd[] = "cd.. \r\n dir \r\n C:\\msys64\\usr\\bin\\ls -lvt \r\n exit\r\n" ;
+            const char cmd[] = u8"cd.. \r\n dir \r\n C:\\msys64\\usr\\bin\\ls -lvt \r\n exit\r\n" ;
             DWORD write_size;
             VERIFY( WriteFile( pty_in[WRITE_SIDE] , cmd , DWORD(strlen( cmd )), &write_size , nullptr ) );
           }
