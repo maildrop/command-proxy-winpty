@@ -348,10 +348,78 @@ HRESULT spawn_with_pseudo_console(COORD size)
             waitlist.push_back( reinterpret_cast<HANDLE>(console_read_thread));
           }
 
-          if( 1 ){ // command test code
-            const char cmd[] = u8"cd.. \r\n dir \r\n C:\\msys64\\usr\\bin\\ls -lvt \r\n exit\r\n" ;
-            DWORD write_size;
-            VERIFY( WriteFile( pty_in[WRITE_SIDE] , cmd , DWORD(strlen( cmd )), &write_size , nullptr ) );
+          struct pump_handles{
+            HANDLE in;
+            HANDLE out;
+          } handles = { GetStdHandle( STD_INPUT_HANDLE ) , pty_in[WRITE_SIDE] };
+          
+          uintptr_t stdinput_reader = 
+            _beginthreadex( nullptr , 0 , []( void* handle_value)->unsigned{
+              const struct pump_handles * const handles = reinterpret_cast<const struct pump_handles * const>( handle_value );
+              if( INVALID_HANDLE_VALUE != handles->in ){
+                auto buffer = std::make_unique<std::array<char,4096>>();
+                
+                for(;;){
+                  if( WAIT_IO_COMPLETION == SleepEx( 0 , TRUE ) ){
+                    break;
+                  }
+                  DWORD numberOfBytesRead = 0;
+                  if(! ReadFile( handles->in ,
+                                 reinterpret_cast<LPVOID>(buffer->data()),
+                                 DWORD( std::size( *buffer ) ),
+                                 &numberOfBytesRead ,
+                                 nullptr )){
+                    DWORD lastError = GetLastError();
+                    if( ERROR_OPERATION_ABORTED == lastError ){
+                      // Input Operation was canceled.
+                      OutputDebugString(TEXT(" stdinput_reader cancel" ));
+                      break;
+                    }
+                    break;
+                  }
+                  std::wstringstream msg{};
+                  msg << "numberOfBytesRead " << numberOfBytesRead << "  :" ;
+                  wchar_t outbuffer[1024];
+                  int number_of_converted_wchar = 0;
+                  if( 0 < (number_of_converted_wchar =
+                           MultiByteToWideChar ( GetACP() , 0 ,
+                                                 buffer->data(), numberOfBytesRead ,
+                                                 outbuffer, sizeof( outbuffer )/sizeof( outbuffer[0] )))) {
+                    msg << std::wstring{ outbuffer , outbuffer+number_of_converted_wchar };
+                    int require_size = WideCharToMultiByte( CP_UTF8 , 0 ,
+                                                            outbuffer , number_of_converted_wchar  ,
+                                                            nullptr , 0,
+                                                            nullptr , nullptr );
+                    msg << ", require_size = " << require_size;
+                    if( 0 < require_size ){
+                      std::unique_ptr<char[]> narrow{ new char[require_size] };
+                      if( narrow ){
+                        VERIFY( require_size == WideCharToMultiByte( CP_UTF8 , 0 ,
+                                                                     outbuffer , number_of_converted_wchar ,
+                                                                     narrow.get() , require_size ,
+                                                                     nullptr , nullptr ) );
+                        DWORD numberOfBytesWrite;
+                        WriteFile( handles->out ,
+                                   reinterpret_cast<LPVOID>(narrow.get()) ,
+                                   require_size ,
+                                   &numberOfBytesWrite ,
+                                   nullptr );
+                        if(! FlushFileBuffers( handles->out ) ){
+                          DWORD lastError = GetLastError();
+                          (void)(lastError);
+                        }
+                      }
+                    }
+                  }
+                  OutputDebugStringW( msg.str().c_str()  );
+                }
+                SleepEx( 0 , TRUE );
+              }
+              return EXIT_SUCCESS;
+            } , reinterpret_cast<void*>(&handles) , 0 , nullptr );
+
+          if( stdinput_reader ){
+            waitlist.push_back( reinterpret_cast<HANDLE>(console_read_thread));
           }
           
           for(;;){
