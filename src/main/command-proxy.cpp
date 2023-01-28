@@ -64,119 +64,139 @@ unsigned ( __stdcall pty_out_read_thread)( void *handle_value )
     
     std::unique_ptr<std::array<char,4096>> buffer{new std::array<char,4096>()};
 
-    DWORD numberOfBytesRead;
+    DWORD numberOfBytesRead = 0;
     while( ReadFile( handle , buffer->data() , DWORD(std::size( *buffer )) , &numberOfBytesRead , nullptr ) ){
-      std::wstringstream out{};
-      wchar_t wide[4096] = {L'\0'} ;
-      int wnumber = MultiByteToWideChar( CP_UTF8 , 0 , buffer->data(), numberOfBytesRead , wide , sizeof( wide )/sizeof( wide[0] ));
 
-      /* シーケンスを処理しないといけない
+      wchar_t wide[4096] = {L'\0'} ;
+      int const wnumber =
+        MultiByteToWideChar( CP_UTF8 , 0 , buffer->data(), numberOfBytesRead , wide , sizeof( wide )/sizeof( wide[0] ));
+
+      /*
+       * シーケンスを処理しないといけない
        * TODO とりあえずの適当な実装 真面目にあとでやる
        */
-      do{
-        wchar_t *cur = &wide[0];
-        for( auto&& c = *cur ; cur < &wide[wnumber] ; c=(*++cur) ){
-          if( 0x00 == c ){
-            OutputDebugString( L"Soft Return\n" );
-            continue;
-          }
-          if( L'\r' == c ){
-            continue;
-          }else if( 0x1b == c ){
-            OutputDebugString( TEXT("ESC\n" ));
-            if( L']' == *(cur+1) ){
-              OutputDebugString( TEXT("ESC]\n" ));
-              if( L'0' == *(cur+2) ){
+
+      std::wstringstream out{};
+
+      wchar_t *cur = &wide[0];
+      for( auto&& c = *cur ; cur < &wide[wnumber] ; c=(*++cur) ){
+        if( L'\0' == c ){
+          OutputDebugString( L"Soft Return\n" );
+          continue;
+        }else if( L'\r' == c ){
+          continue;
+        }else if( L'\n' == c ){
+          out << std::endl;
+        }else if( 0x1b == c ){
+          OutputDebugString( TEXT("ESC\n" ));
+
+          if( L']' == *(cur+1) ){
+            OutputDebugString( TEXT("ESC]\n" ));
+            switch( *(cur+2) ){
+            case L'0':
+              {
                 OutputDebugString( TEXT("ESC]0\n" ));
                 if( L';' == *(cur+3) ){
                   wchar_t * const begin = cur+4;
-                  wchar_t* idx = begin;
+                  wchar_t *idx = begin;
                   for( ; 0x07 != *idx ; ++idx );
                   std::wstring title{ begin , idx };
                   OutputDebugString( (L"ConsoleWindowTitle [" + title + L"]" ).c_str() );
                   cur += 4+(idx-begin);
                   continue;
                 }
-              }else if( L'4' == *(cur+2) ){
-                OutputDebugString( L"ESC]4\n" );
-              }else{
-                std::wstring msg{L"ESC]0"};
-                msg += (*cur+2);
-                OutputDebugStringW( msg.c_str() );
               }
-            }else if( L'[' == *(cur+1)){
-              if( L'?' == *(cur+2) ){
-                if( L'2' == *(cur+3) ){
-                  if( L'5' == *(cur+4) ){
-                    if( L'h' == *(cur+5) ){ // テキストカーソル有効化モード表示
-                      cur += 5;
-                      continue;
-                    }else if( L'l' == *(cur+5 )){ // テキストカーソル有効化モード 非表示
-                      cur += 5;
-                      continue;
-                    }
-                  }
-                }
-              }else if( L'H' == *(cur+2) ){ // カーソル位置の移動
-                cur+=2;
-                continue;
-              }else if( L'm' == *(cur+2) ){ // 色
-                cur+=2;
-                continue;
-              }else if( L'1' == *(cur+2) ){
-                if( L'0' == *(cur+3) ){
-                  if( L';' == *(cur+4) ){
-                    if( L'1' == *(cur+5) ){
-                      if( L'H' == *(cur+6) ){
-                        cur += 6;
-                        out << L"\n";
-                        continue;
-                      }
-                    }
-                  }
-                }
-              }else if( L'2' == *(cur+2) ){
-                if( L'J' == *(cur+3) ){
-                  cur += 3;
-                  continue;
-                }else if( L'5' == *(cur+3) ){
-                  if( L'H' == *(cur+4)){
-                    cur += 4;
+              break;
+            case L'4':
+              OutputDebugString( L"ESC]4\n" );
+              break;
+            default:
+              break;
+            }
+          }else if( L'[' == *(cur+1)){
+            if( L'K' == *(cur+2) ){
+              cur += 2;
+              continue;
+            }else if( L'?' == *(cur+2) ){
+              if( L'2' == *(cur+3) ){
+                if( L'5' == *(cur+4) ){
+                  if( L'h' == *(cur+5) ){ // テキストカーソル有効化モード表示
+                    cur += 5;
+                    continue;
+                  }else if( L'l' == *(cur+5 )){ // テキストカーソル有効化モード 非表示
+                    cur += 5;
                     continue;
                   }
                 }
-              }else if( L'4' == *(cur+2)){
-                if( L';' == *(cur+3) ){
-                  if( L'1' == *(cur+4 ) ){
-                    if( L'H' == *(cur+5)){
-                      cur += 5;
-                      out << '\n' << '\n';
+              }
+            }else if( L'H' == *(cur+2) ){ // カーソル位置の移動
+              cur+=2;
+              continue;
+            }else if( L'm' == *(cur+2) ){ // 色
+              cur+=2;
+              continue;
+            }else if( L'1' == *(cur+2) ){
+              if( L'0' == *(cur+3) ){
+                if( L';' == *(cur+4) ){
+                  if( L'1' == *(cur+5) ){
+                    if( L'H' == *(cur+6) ){
+                      cur += 6;
+                      out << std::endl;
                       continue;
                     }
                   }
                 }
-              }else if( L'8' == *(cur+2)){
-                if( L';' == *(cur+3) ){
-                  if( L'1' == *(cur+4 ) ){
-                    if( L'H' == *(cur+5)){
-                      cur += 5;
-                      out << '\n' << '\n';
-                      continue;
-                    }
+              }
+            }else if( L'2' == *(cur+2) ){
+              if( L'J' == *(cur+3) ){
+                cur += 3;
+                continue;
+              }else if( L'5' == *(cur+3) ){
+                if( L'H' == *(cur+4)){
+                  cur += 4;
+                  continue;
+                }
+              }else if( L'C' == *(cur+3) ){ // カーソルの移動
+                cur += 3;
+                out << L"  " ;
+                continue;
+              }
+
+            }else if( L'4' == *(cur+2)){
+              if( L';' == *(cur+3) ){
+                if( L'1' == *(cur+4 ) ){
+                  if( L'H' == *(cur+5)){
+                    cur += 5;
+                    out << std::endl << std::endl;
+                    continue;
+                  }
+                }
+              }
+            }else if( L'8' == *(cur+2)){
+              if( L';' == *(cur+3) ){
+                if( L'1' == *(cur+4 ) ){
+                  if( L'H' == *(cur+5)){
+                    cur += 5;
+                    out << std::endl << std::endl;
+                    continue;
                   }
                 }
               }
             }
           }
+          out << "ESC";
+        }else{
           out << c;
         }
-      }while( 0 );
+      }
 
       {
         char narrow[4096] = {'\0'};
         std::wstring out_str = out.str();
-        
-        int nnumber = WideCharToMultiByte( CP_ACP , 0 , out_str.c_str() , (int)out_str.size() , narrow , sizeof( narrow )/sizeof( narrow[0] ),nullptr,nullptr );
+        int nnumber = WideCharToMultiByte( CP_ACP , 0 ,
+                                           out_str.c_str() , (int)out_str.size() ,
+                                           narrow , sizeof( narrow )/sizeof( narrow[0] ),
+                                           nullptr,nullptr );
         if( 0 < nnumber ){
           std::cout.write( narrow , nnumber );
           std::cout.flush();
@@ -336,8 +356,7 @@ HRESULT spawn_with_pseudo_console(COORD size)
           waitlist.push_back( pi.hProcess );
           VERIFY( CloseHandle( pi.hThread ) );
 
-          // TODO console read thread の起動
-          
+          // Pseudo console からの read thread
           uintptr_t console_read_thread =
             _beginthreadex( nullptr , 0 ,
                             pty_out_read_thread, 
@@ -348,6 +367,8 @@ HRESULT spawn_with_pseudo_console(COORD size)
             waitlist.push_back( reinterpret_cast<HANDLE>(console_read_thread));
           }
 
+
+          // このプロセスの標準入力を読み取るスレッド
           struct pump_handles{
             HANDLE in;
             HANDLE out;
@@ -463,7 +484,6 @@ static SHORT entry( int argc , char** argv)
   // MSYS2 のコマンドを実行するのには、環境変数LC_CTYPE を追加してやるべき
   // wmic os get OSLanguage /Value
   // GetUserPreferredUILanguages で取得するのがよさそう
-  VERIFY( SetEnvironmentVariable( TEXT("LC_CTYPE") , TEXT("ja_JP.UTF-8") ) );
 
   if(0){
     HANDLE hStdOut = GetStdHandle( STD_OUTPUT_HANDLE );
@@ -476,7 +496,7 @@ static SHORT entry( int argc , char** argv)
     }
   }
   
-  spawn_with_pseudo_console( COORD{200,100} );
+  spawn_with_pseudo_console( COORD{80,1} );
   return EXIT_SUCCESS;
 }
 
