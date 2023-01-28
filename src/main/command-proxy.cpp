@@ -56,7 +56,6 @@ static SHORT entry( int argc , char** argv);
 #define READ_SIDE (0)
 #define WRITE_SIDE (1)
 
-
 static
 unsigned ( __stdcall pty_out_read_thread)( void *handle_value )
 {
