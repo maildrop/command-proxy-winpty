@@ -1,7 +1,7 @@
 ﻿/**
    Windows Console Program
    
-   (C) 2010-2023 TOGURO Mikito, 
+   (C) 2010-2023,2025 TOGURO Mikito, 
 */
 
 #ifndef WINVER
@@ -17,12 +17,15 @@
 #endif 
 
 #include <iostream>
+#include <locale>
+
 #include <limits>
 #include <type_traits>
 #include <array>
 #include <vector>
 #include <tuple>
-#include <locale>
+#include <algorithm>
+#include <functional>
 #include <sstream>
 
 /* Windows SDK */
@@ -48,15 +51,114 @@
 
 #pragma comment( lib , "ole32.lib" )
 
-static HANDLE currentThreadHandle(void);
-static BOOL CtrlHandler( DWORD fdwCtrlType );
-static SHORT entry( int argc , char** argv);
-
 /* for PIPE */
 #define READ_SIDE (0)
 #define WRITE_SIDE (1)
 
-static
+static inline std::wstring comspec() noexcept;
+std::vector<std::wstring>& setupEnvList( std::vector<std::wstring>& envList ) noexcept;
+std::vector<std::wstring>& replaceEnvListElement( std::vector<std::wstring>& envList ,
+                                                  const wchar_t* key ,
+                                                  const wchar_t* value ) noexcept;
+std::unique_ptr<wchar_t[]> buildEnvBlock( std::vector<std::wstring>& envList ) noexcept;
+
+unsigned (__stdcall pipeListener)(LPVOID pipe) noexcept;
+
+static HANDLE currentThreadHandle(void) noexcept;
+static BOOL CtrlHandler( DWORD fdwCtrlType );
+static SHORT entry( int argc , char** argv);
+
+static inline std::wstring
+comspec() noexcept
+{
+  size_t const required_length =
+    size_t{ GetEnvironmentVariableW( L"COMSPEC" , nullptr , 0 )};
+
+  if( ! required_length ){
+    const DWORD lastError = GetLastError();
+    if ( ERROR_ENVVAR_NOT_FOUND == lastError ) {
+      return std::wstring{};
+    }
+  }
+  
+  if( 0 < required_length ){
+    std::unique_ptr<wchar_t[]> buffer = std::make_unique<wchar_t[]>( required_length );
+    GetEnvironmentVariable( L"COMSPEC" , buffer.get() , DWORD(required_length) );
+    return std::wstring{ buffer.get() };
+  }
+  return std::wstring{};
+}
+
+std::vector<std::wstring>&
+setupEnvList( std::vector<std::wstring>& envList ) noexcept
+{
+  wchar_t* envBlock = GetEnvironmentStringsW();
+  if( envBlock ){
+    for( wchar_t *env = envBlock ;
+         *env != L'\0' ;
+         env += std::char_traits<wchar_t>::length( env ) + 1) {
+      envList.emplace_back( env );
+    }
+    VERIFY( FreeEnvironmentStringsW ( envBlock ) );
+  }
+  return envList;
+}
+
+std::vector<std::wstring>&
+replaceEnvListElement( std::vector<std::wstring>& envList ,
+                       const wchar_t* key ,
+                       const wchar_t* value ) noexcept
+{
+  assert( key != nullptr );
+  if( key == nullptr ){
+    return envList;
+  }
+  
+  envList.erase( std::remove_if( std::begin( envList ) ,
+                                 std::end( envList ) ,
+                                 std::bind( []( const std::wstring &val , const wchar_t* param ) ->int {
+                                   auto const pos = val.find_first_of( L'=' );
+                                   return ( (std::wstring::npos == pos ) ? val : val.substr( 0, pos ) ) == param ;
+                                 } , std::placeholders::_1 , key ) ), 
+                 std::end( envList ));
+  if( value != nullptr && std::wstring{L""} != value ){
+    envList.push_back( (std::wstring{ key } + L"=" + std::wstring{ value }) );
+  }
+
+  std::sort( std::begin( envList ) , std::end( envList ) ,
+             []( const std::wstring& l , const std::wstring& r ) -> int {
+               auto const lpos = l.find_first_of( L'=' );
+               auto const rpos = r.find_first_of( L'=' );
+               return
+                 (std::wstring::npos == lpos ? l : l.substr(0, lpos)) < (std::wstring::npos == rpos ? r : r.substr(0, rpos));
+             } );
+  return envList;
+}
+
+std::unique_ptr<wchar_t[]> 
+buildEnvBlock( std::vector<std::wstring>& envList ) noexcept
+{
+  size_t n = 1;
+  std::for_each( std::begin( envList ), std::end( envList ),
+                 [&n](const std::wstring& l)-> void {
+                   n+=(l.length()+1);
+                 });
+  std::unique_ptr<wchar_t[]> envBlock = std::make_unique<wchar_t[]>(n) ;
+  {
+    auto ite = envBlock.get();
+    std::for_each( std::begin( envList ), std::end( envList ),
+                   [&ite]( const std::wstring& l)-> void {
+                     ite = std::copy( std::begin( l ) , std::end( l ),
+                                      ite );
+                     *ite++ = L'\0';
+                   });
+    *ite++ = L'\0';
+    assert( ( envBlock.get() + n ) == ite &&  "check end of memory block");
+  }
+  return envBlock;
+}
+
+
 unsigned ( __stdcall pty_out_read_thread)( void *handle_value )
 {
   HANDLE handle = reinterpret_cast<HANDLE>( handle_value );
@@ -209,51 +311,53 @@ unsigned ( __stdcall pty_out_read_thread)( void *handle_value )
 
 static HRESULT prepare_startup_information(HPCON hpc, STARTUPINFOEX& si)
 {
-    // Prepare Startup Information structure
-    static_assert( sizeof( std::remove_reference<decltype( si )>::type ) == sizeof( STARTUPINFOEX ) );
-    si = {};
-    si.StartupInfo.cb = sizeof(STARTUPINFOEX);
-    si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
-    si.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
-    si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
-    si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
-    
-    // Discover the size required for the list
-    size_t bytesRequired = 0;
-    InitializeProcThreadAttributeList(NULL, 1, 0, &bytesRequired);
+  // Prepare Startup Information structure
+  static_assert( sizeof( std::remove_reference<decltype( si )>::type ) == sizeof( STARTUPINFOEX ) );
+  si = {};
+  si.StartupInfo.cb = sizeof(STARTUPINFOEX);
 
-    // Allocate memory to represent the list
-    si.lpAttributeList = (PPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc( GetProcessHeap(), 0, bytesRequired);
-    if (!si.lpAttributeList)
-    {
-        return E_OUTOFMEMORY;
-    }
-
-    // Initialize the list memory location
-    if (!InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &bytesRequired)){
-      DWORD lastError = GetLastError();
-      HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
-      return HRESULT_FROM_WIN32(lastError);
-    }
-
-    // Set the pseudoconsole information into the list
-    if (!UpdateProcThreadAttribute(si.lpAttributeList,
-                                   0,
-                                   PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-                                   hpc,
-                                   sizeof(HPCON),
-                                   NULL,
-                                   NULL) ){
-      DWORD lastError = GetLastError();
-      HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
-      return HRESULT_FROM_WIN32(lastError);
-    }
-    return S_OK;
+  si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+  si.StartupInfo.hStdInput = NULL;
+  si.StartupInfo.hStdOutput = NULL;
+  si.StartupInfo.hStdError = NULL;
+  
+  // Discover the size required for the list
+  size_t bytesRequired = 0;
+  InitializeProcThreadAttributeList(NULL, 1, 0, &bytesRequired);
+  
+  // Allocate memory to represent the list
+  si.lpAttributeList =
+    reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>( ::HeapAlloc( GetProcessHeap(), 0, bytesRequired) );
+  
+  if (!si.lpAttributeList) {
+    return E_OUTOFMEMORY;
+  }
+  
+  // Initialize the list memory location
+  if (!InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &bytesRequired)){
+    DWORD lastError = GetLastError();
+    HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
+    return HRESULT_FROM_WIN32(lastError);
+  }
+  
+  // Set the pseudoconsole information into the list
+  if (!UpdateProcThreadAttribute(si.lpAttributeList,
+                                 0,
+                                 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+                                 hpc,
+                                 sizeof(HPCON),
+                                 NULL,
+                                 NULL) ){
+    DWORD lastError = GetLastError();
+    ::HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
+    return HRESULT_FROM_WIN32(lastError);
+  }
+  return S_OK;
 }
 
 HRESULT spawn_with_pseudo_console(COORD size)
 {
-  wchar_t cmdLineMutable[] = L"c:\\windows\\system32\\cmd.exe";
+  wchar_t cmdLineMutable[] = L"c:\\Users\\mit\\devel\\Win32\\command-proxy-winpty\\src\\main\\winpty-cmdinvoker.exe";
 
   HANDLE pty_in[2]  = { INVALID_HANDLE_VALUE , INVALID_HANDLE_VALUE };
   HANDLE pty_out[2] = { INVALID_HANDLE_VALUE , INVALID_HANDLE_VALUE };
@@ -296,13 +400,13 @@ HRESULT spawn_with_pseudo_console(COORD size)
         {
           boolean require_LC_CTYPE = true;
           { // copy current environment block
-            TCHAR* env_block = GetEnvironmentStrings();
+            TCHAR* env_block = GetEnvironmentStringsW();
             if( env_block ){
               for( TCHAR* ptr = env_block ; TEXT('\0') != *ptr ; ptr += (_tcslen( ptr ) + 1 )){
                 // TODO check LC_CTYPE 
                 process_env_block << ptr << TEXT('\0');
               }
-              VERIFY( FreeEnvironmentStrings(env_block) );
+              VERIFY( FreeEnvironmentStringsW(env_block) );
             }
           }
           if( require_LC_CTYPE ){
@@ -358,15 +462,15 @@ HRESULT spawn_with_pseudo_console(COORD size)
 
           // Pseudo console からの read thread
           uintptr_t console_read_thread =
-            _beginthreadex( nullptr , 0 ,
-                            pty_out_read_thread, 
+            _beginthreadex( nullptr , // security 
+                            0 , // stack size
+                            pipeListener ,// pty_out_read_thread, 
                             pty_out[READ_SIDE],
                             0,
                             nullptr );
           if( console_read_thread ){
             waitlist.push_back( reinterpret_cast<HANDLE>(console_read_thread));
           }
-
 
           // このプロセスの標準入力を読み取るスレッド
           struct pump_handles{
@@ -467,7 +571,7 @@ HRESULT spawn_with_pseudo_console(COORD size)
         }
         VERIFY( HeapFree( GetProcessHeap() , 0 , si.lpAttributeList ));
         
-        ClosePseudoConsole( hpc );
+        ::ClosePseudoConsole( hpc );
       }
       VERIFY( CloseHandle( pty_out[READ_SIDE] ));
     }
@@ -478,6 +582,7 @@ HRESULT spawn_with_pseudo_console(COORD size)
 
 static SHORT entry( int argc , char** argv)
 {
+
   std::ignore = argc ;
   std::ignore = argv ;
   
@@ -496,7 +601,8 @@ static SHORT entry( int argc , char** argv)
     }
   }
   
-  spawn_with_pseudo_console( COORD{80,1} );
+  spawn_with_pseudo_console( COORD{1024,25} );
+
   return EXIT_SUCCESS;
 }
 
@@ -527,9 +633,10 @@ static BOOL CtrlHandler( DWORD fdwCtrlType )
   return FALSE;
 }
 
-static HANDLE currentThreadHandle(void)
+static HANDLE
+currentThreadHandle(void) noexcept
 {
-  HANDLE h = NULL;
+  HANDLE h{};
   if( DuplicateHandle( GetCurrentProcess() , GetCurrentThread() ,
                        GetCurrentProcess() , &h ,
                        0 ,
@@ -537,9 +644,31 @@ static HANDLE currentThreadHandle(void)
                        DUPLICATE_SAME_ACCESS ) ){
     return h;
   }
-  return NULL;
+  return HANDLE{};
 }
 
+unsigned (__stdcall pipeListener)(LPVOID pipe) noexcept
+{
+    HANDLE hPipe{ pipe };
+    HANDLE hConsole{ GetStdHandle(STD_OUTPUT_HANDLE) };
+
+    const DWORD BUFF_SIZE{ 512 };
+    char szBuffer[BUFF_SIZE]{};
+
+    DWORD dwBytesWritten{};
+    DWORD dwBytesRead{};
+    BOOL fRead{ FALSE };
+    do {
+      // Read from the pipe
+      fRead = ReadFile(hPipe, szBuffer, BUFF_SIZE, &dwBytesRead, NULL);
+      
+      // Write received text to the Console
+      // Note: Write to the Console using WriteFile(hConsole...), not printf()/puts() to
+      // prevent partially-read VT sequences from corrupting output
+      WriteFile(hConsole, szBuffer, dwBytesRead, &dwBytesWritten, NULL);
+    } while (fRead && dwBytesRead >= 0);
+    return EXIT_SUCCESS;
+}
 
 #if defined( __cplusplus )
 namespace wh{
@@ -730,3 +859,4 @@ int main(int argc,char* argv[])
 
   return return_value;
 }
+
