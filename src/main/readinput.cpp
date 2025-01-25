@@ -46,13 +46,14 @@
 # endif /* defined( NDEBUG ) */
 #endif /* !defined( VERIFY ) */
 
-#pragma comment( lib , "ole32.lib" )
+#pragma comment (lib , "ole32.lib")
+#pragma comment (lib , "rpcrt4")
 
 static HANDLE currentThreadHandle(void);
 static BOOL CtrlHandler( DWORD fdwCtrlType );
 static SHORT entry( int argc , char** argv);
 
-
+#if 0 
 class StandardInputDispatcher{
 private:
   uintptr_t worker;
@@ -69,25 +70,27 @@ public:
     } parameter = { input , output };
     return *this;
   }
+
   void dispose(void)
   {
-    
     if( worker ){
       if( CloseHandle( reinterpret_cast<HANDLE>(worker) ) ){
         worker = NULL;
       }
     }
   }
+
   static
   StandardInputDispatcher cocreate( HANDLE input, HANDLE output )
   {
     return StandardInputDispatcher{}.invoke( input , output );
   }
 };
-
+#endif /* 0 */
 
 static SHORT entry( int argc , char** argv)
 {
+
   std::ignore = argc ;
   std::ignore = argv ;
 
@@ -241,6 +244,10 @@ static BOOL CtrlHandler( DWORD fdwCtrlType )
   return FALSE;
 }
 
+/**
+   現在のスレッドを示す (GetCurrentThread() で得られる疑似ハンドルではなく）本物のスレッドハンドルを返す
+   失敗した場合には NULL を返す
+*/
 static HANDLE currentThreadHandle(void)
 {
   HANDLE h = NULL;
@@ -254,11 +261,9 @@ static HANDLE currentThreadHandle(void)
   return NULL;
 }
 
-
 #if defined( __cplusplus )
 namespace wh{
   namespace util{
-
     /*
       今、 SFINAE を使って CRTの機能である、_get_heap_handle() が使えるかどうかを判定したいのだが、
       decltype( _get_heap_handle() ) とすると この部分は、template（の型引数）に依存しなくなるので、
