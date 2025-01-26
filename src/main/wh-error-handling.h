@@ -5,9 +5,7 @@
 #if !defined( WH_ERROR_HANDLING_H_HEADER_GUARD )
 #define WH_ERROR_HANDLING_H_HEADER_GUARD 1
 /**
-   
-
-   
+   エラーのハンドリングを行うためのルーチンを納めたヘッダファイル
  */
 #if defined( __cplusplus )
 
