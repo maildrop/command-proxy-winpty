@@ -53,6 +53,10 @@ int io_wrap( HANDLE standard_input , HANDLE standard_output , HANDLE standard_er
   std::wstring const commandline{ ([&runtime_option]()->std::wstring{
     wh::CommandArgumentsBuilder builder{ application::environment::comspec() };
 
+    for( auto&& file : runtime_option.fileList ){
+      builder.add_value( file );
+    }
+    
     return builder.build();
   })() };
 
@@ -84,7 +88,7 @@ int io_wrap( HANDLE standard_input , HANDLE standard_output , HANDLE standard_er
 
   if( runtime_option.debug ){
     std::wcout << L" CreateProcess() \"" << commandlineParam.get() << L"\"" << std::endl;
-    std::wcout << L"  STDIN handle(" << standard_input << ")" << std::endl;
+    std::wcout << L"  STDIN  handle(" << standard_input << ")" << std::endl;
     std::wcout << L"  STDOUT handle(" << standard_output << ")" << std::endl;
     std::wcout << L"  STDERR handle(" << standard_error << ")" << std::endl;
   }
@@ -182,9 +186,11 @@ int io_wrap( HANDLE standard_input , HANDLE standard_output,
       assert( error == INVALID_HANDLE_VALUE );
       error = INVALID_HANDLE_VALUE;
     }else{
-      std::wcout << "same file "
-                 << "duplicate standard_input = " << standard_input
-                 << ", duplicate_handle = " << h << std::endl;
+      if( runtime_option.debug ){
+        std::wcout << "same file "
+                   << "duplicate standard_output = " << standard_input
+                   << ", duplicate_handle = " << h << std::endl;
+      }
       error = h ;
     }
   }else{
@@ -283,8 +289,9 @@ entry_point() noexcept
   };
   
   struct RuntimeOption{
-    bool showHelp;
     bool debug;
+    bool showHelp;
+    bool listCodePages;
     bool interactive_shell;
     std::wstring input_codepage;
     std::wstring output_codepage;
@@ -292,10 +299,11 @@ entry_point() noexcept
     std::wstring stdout_path;
     std::wstring stderr_path;
     std::vector<std::wstring> fileList{}; 
-
+    
     RuntimeOption()
-      : showHelp{false},
-        debug{ false },
+      : debug{ false },
+        showHelp{false},
+        listCodePages{ false }, 
         interactive_shell{ false },
         input_codepage{L"utf-8"},
         output_codepage{L"utf-8"},
@@ -320,12 +328,15 @@ entry_point() noexcept
       }
       std::wcout << ")" << std::endl;
 #endif /* 0 */
-      
-      if( (!!opt.long_option) && std::wstring{L"help"} == opt.long_option ){
+      if( (!!opt.long_option) && std::wstring{L"debug"} == opt.long_option ){
+        this->debug = true;
+        return true;
+      }else if( (!!opt.long_option) && std::wstring{L"help"} == opt.long_option ){
         this->showHelp = true;
         return true;
-      }else if( (!!opt.long_option) && std::wstring{L"debug"} == opt.long_option ){
-        this->debug = true;
+      }else if( (!!opt.long_option) && std::wstring{L"list-codepages"} == opt.long_option ){
+        this->showHelp = true;
+        this->listCodePages = true;
         return true;
       }else if( (!!opt.long_option) && std::wstring{L"interactive"} == opt.long_option ){
         this->interactive_shell = true;
@@ -358,6 +369,7 @@ entry_point() noexcept
                                        {L'\0' , L"stdin"          , L"standard input"   , 1 } ,
                                        {L'\0' , L"stdout"         , L"standard output"  , 1 } ,
                                        {L'\0' , L"stderr"         , L"standard error"   , 1 } ,
+                                       {L'\0' , L"list-codepages" , L"list codepage of system installed" , 0 }, 
                                        {L'\0' , L"input-codepage" , L"input code page"  , 1 } ,
                                        {L'\0' , L"output-codepage", L"output code page" , 1 } }; 
 
@@ -366,7 +378,7 @@ entry_point() noexcept
       if( runtimeOption.debug ){
         std::wcout << "enable debug mode" << std::endl;
         std::wcout << " interactive: " << runtimeOption.interactive_shell << std::endl;
-        std::wcout << " stdin: "
+        std::wcout << " stdin:  "
                    << ( runtimeOption.stdin_path.empty() ?
                         std::wstring{L"(Console)"} : (L"\"" + runtimeOption.stdin_path + L"\"" ))
                    << ", input-codepage: " << runtimeOption.input_codepage
@@ -383,8 +395,25 @@ entry_point() noexcept
                        std::wstring{L"(Console)"} : (L"\"" + runtimeOption.stderr_path + L"\"" ))
                    << std::endl;
       }
+      if( runtimeOption.debug ){
+      }
       if( runtimeOption.showHelp ){
         std::wcout << "Help" << std::endl;
+        if( runtimeOption.listCodePages ){
+
+          EnumSystemCodePagesW( []( LPWSTR lpCodePageString )->BOOL{
+            UINT codePage{ (UINT)std::stoi( lpCodePageString ) };
+            
+            std::unique_ptr< CPINFOEXW > cpinfoEx{ std::make_unique<CPINFOEXW>() };
+            if( GetCPInfoEx( codePage , 0, cpinfoEx.get() ) ){
+              std::wcout << cpinfoEx->CodePageName << std::endl;;
+            }else{
+              std::wcout << lpCodePageString << std::endl;
+            }
+            return TRUE;
+          }, CP_INSTALLED);
+          
+        }
         return EXIT_SUCCESS;
       }
       return io_wrap( runtimeOption );
