@@ -1,12 +1,26 @@
-﻿#if !defined( WH_PARSE_OPTION_H_HEADER_GUARD )
+﻿#if defined( _MSC_VER )
+# pragma once
+#endif defined( _MSC_VER ) 
+
+#if !defined( WH_PARSE_OPTION_H_HEADER_GUARD )
 #define WH_PARSE_OPTION_H_HEADER_GUARD 1
+/**
+   wh-parse-option.h -- a part of Windows Helper library.
+   コマンドラインのオプションパーザーと、コマンドラインの組み立てのためのビルダー
+ */
 
 #if defined( WIN32 )
+
 # include <shellapi.h>
 // CommandLineToArgvW 
-# pragma comment( lib ,"shell32.lib" )
+# if defined( _MSC_VER )
+#  pragma comment( lib ,"shell32.lib" )
+# endif /* defined( _MSC_VER ) */
+
 #else
+
 # error not Win32
+
 #endif /* !defined( WIN32 ) */
 
 #if defined( __cplusplus )
