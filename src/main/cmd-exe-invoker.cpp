@@ -575,7 +575,7 @@ int main(int,char*[])
   // HeapSetInformation() は Kernel32.dll 
   { // プロセスヒープの破壊をチェック Kernel32.dll依存だが、これは KnownDLL
     HANDLE processHeapHandle = ::GetProcessHeap(); // こちらの関数は、HANDLE が戻り値
-    VERIFY( processHeapHandle != NULL );
+    VERIFY( NULL != processHeapHandle );
     if( processHeapHandle ){
       VERIFY( HeapSetInformation(processHeapHandle, HeapEnableTerminationOnCorruption, NULL, 0) );
     }
@@ -595,14 +595,13 @@ int main(int,char*[])
       return 1;
     }
     FARPROC pFarProc = GetProcAddress( kernel32ModuleHandle , "SetDllDirectoryW");
-    if( NULL == pFarProc ){
+    if( nullptr == pFarProc ){
       return 1;
     }
     decltype(SetDllDirectoryW) *pSetDllDirectoryW(reinterpret_cast<decltype(SetDllDirectoryW)*>(pFarProc) );
     VERIFY( 0 != pSetDllDirectoryW(L"") ); /* サーチパスからカレントワーキングディレクトリを排除する */
   }
 
-  
   std::locale::global( std::locale{""} );
 
   return entry_point();
