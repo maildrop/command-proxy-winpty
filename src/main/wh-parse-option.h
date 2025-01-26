@@ -344,22 +344,30 @@ namespace wh {
     {
       std::wostringstream stream{};
       for( std::tuple<std::wstring,std::wstring>& arg : arguments ){
-
         if( !std::get<0>( arg ).empty() ){
           auto pos = std::find_if( std::begin( std::get<0>( arg )  ) ,
                                    std::end( std::get<0>( arg ) ),
                                    [](const wchar_t &c ) -> bool{
                                      return iswspace( c );
                                    } );
+
+          if( !stream.str().empty() ){
+            stream << L' ';
+          }
+          
           if( pos == std::end( std::get<0>( arg ) )){
             stream << std::get<0>( arg );
           }else{
             stream << L'"' << std::get<0>( arg ) << L'"'; 
           }
-          stream << L' ';
         }
 
         if( !std::get<1>( arg ).empty() ){
+
+          if( !stream.str().empty() ){
+            stream << L' ';
+          }
+          
           auto pos = std::find_if( std::begin( std::get<1>( arg ) ),
                                    std::end( std::get<1>( arg ) ),
                                    [](const wchar_t &c) -> bool {
@@ -370,7 +378,6 @@ namespace wh {
           }else{
             stream << L'"' << std::get<1>( arg ) << L'"'; 
           }
-          stream << L' ';
         }
       }
       return std::wstring{stream.str()};
