@@ -23,7 +23,7 @@ winpty-cmdinvoker.exe: $(winpty_cmdinvoker_LIBS) $(winpty_cmdinvoker_OBJS)
 readinput.exe: readinput.cpp
 	$(CXX) $(CXXFLAGS) /Fe:$@ $**
 
-cmd-exe-invoker.obj: cmd-exe-invoker.cpp wh-parse-option.h
+cmd-exe-invoker.obj: cmd-exe-invoker.cpp wh-parse-option.h wh-error-handling.h
 
 cmd-exe-invoker.exe: $(cmd_exe_invoker_OBJS)
 	$(CXX) $(CXXFLAGS) /Fe:$@ $**
