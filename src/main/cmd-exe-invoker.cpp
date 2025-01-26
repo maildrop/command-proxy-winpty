@@ -48,20 +48,30 @@ static inline
 int io_wrap( HANDLE standard_input , HANDLE standard_output , HANDLE standard_error,
              const runtime_option_t& runtime_option ) noexcept
 {
-  if( runtime_option.debug ){
-    std::wcout << standard_input << "," << standard_output << "," << standard_error << std::endl;
+  std::wstring const commandline{ ([&runtime_option]()->std::wstring{
+    wh::CommandArgumentsBuilder builder{ application::environment::comspec() };
+
+    return builder.build();
+  })() };
+
+  std::unique_ptr<wchar_t[]> commandlineParam = ([&commandline](){
+    /* std::wstring の commandLine を wchar_t[] の中に納める*/
+    const size_t array_size{ commandline.size()+1 };
+    std::unique_ptr<wchar_t[]> commandlineParam{ std::make_unique<wchar_t[]>( array_size ) };
+    if( static_cast<bool>( commandlineParam ) ){
+      VERIFY( commandlineParam.get() ==
+              std::char_traits<wchar_t>::copy( commandlineParam.get() , commandline.c_str() , array_size ) );
+    }else{
+      assert( nullptr == commandlineParam.get() );// メモリ確保に失敗した
+    }
+    return commandlineParam;
+  })();
+
+  if( ! static_cast<bool>( commandlineParam ) ){
+    ::SetLastError( ERROR_OUTOFMEMORY ); // メモリが確保できなかった
+    return EXIT_FAILURE;
   }
-
-  std::wstring commandline{
-    wh::CommandArgumentsBuilder{ application::environment::comspec() }
-    .build()
-  };
-
-  std::unique_ptr<wchar_t[]> commandlineParam{ std::make_unique<wchar_t[]>(commandline.size()+1) };
-
-  std::ignore =
-    std::char_traits<wchar_t>::copy( commandlineParam.get() , commandline.c_str() , commandline.size() + 1 );
-
+  
   STARTUPINFOW startupInfo{};
   startupInfo.cb = sizeof( startupInfo );
   
@@ -69,24 +79,60 @@ int io_wrap( HANDLE standard_input , HANDLE standard_output , HANDLE standard_er
   startupInfo.hStdInput = standard_input ;
   startupInfo.hStdOutput = standard_output;
   startupInfo.hStdError = standard_error;
+
+  if( runtime_option.debug ){
+    std::wcout << L" CreateProcess() \"" << commandlineParam.get() << L"\"" << std::endl;
+    std::wcout << L"  STDIN handle(" << standard_input << ")" << std::endl;
+    std::wcout << L"  STDOUT handle(" << standard_output << ")" << std::endl;
+    std::wcout << L"  STDERR handle(" << standard_error << ")" << std::endl;
+  }
   
   PROCESS_INFORMATION process_information{};
-  
-  CreateProcessW( nullptr,
-                  commandlineParam.get(),
-                  nullptr ,
-                  nullptr ,
-                  TRUE,
-                  NORMAL_PRIORITY_CLASS , 
-                  nullptr ,
-                  nullptr ,
-                  &startupInfo ,
-                  &process_information );
+  if( CreateProcessW( nullptr,
+                      commandlineParam.get(),
+                      nullptr ,
+                      nullptr ,
+                      TRUE,
+                      NORMAL_PRIORITY_CLASS , 
+                      nullptr ,
+                      nullptr ,
+                      &startupInfo ,
+                      &process_information ) ){
 
-  WaitForSingleObject( process_information.hProcess, INFINITE );
+    assert( NULL != process_information.hProcess );
+    assert( NULL != process_information.hThread );
 
-  VERIFY( ::CloseHandle( process_information.hProcess ) );
-  VERIFY( ::CloseHandle( process_information.hThread ) );
+    // Thread は使わないので先に閉じる。
+    VERIFY( ::CloseHandle( process_information.hThread ) );
+
+    DWORD waitResult{};
+    do{
+      waitResult = WaitForSingleObject( process_information.hProcess, INFINITE );
+      switch( waitResult ){
+      case WAIT_ABANDONED:
+        goto END_OF_WAIT_LOOP;
+        break;
+      case WAIT_TIMEOUT:
+        break;
+      case WAIT_FAILED:
+        {
+          DWORD const lastError = GetLastError();
+          std::ignore = lastError; // TODO 
+        }
+        goto END_OF_WAIT_LOOP;
+      case WAIT_OBJECT_0:
+        break;
+      default:
+        assert( !"unknown result" );
+        goto END_OF_WAIT_LOOP;
+      }
+    }while( WAIT_OBJECT_0 != waitResult );
+  END_OF_WAIT_LOOP:
+    VERIFY( ::CloseHandle( process_information.hProcess ) );
+  }else{
+    DWORD const lastError{ ::GetLastError() };
+    std::ignore = lastError ; // TODO;
+  }
 
   return EXIT_SUCCESS;
 }
@@ -213,7 +259,6 @@ int io_wrap( const runtime_option_t& runtime_option ) noexcept
                                 0,
                                 OPEN_EXISTING ,
                                 &extended_parameters );
-  // std::wcout << "CreateFile2( " << runtime_option.stdin_path << ") = " << input << std::endl;
   if( INVALID_HANDLE_VALUE == input ){
     std::wcout << GetLastError() << std::endl;
     return EXIT_FAILURE;
@@ -238,6 +283,8 @@ entry_point() noexcept
     bool showHelp;
     bool debug;
     bool interactive_shell;
+    std::wstring input_codepage;
+    std::wstring output_codepage;
     std::wstring stdin_path;
     std::wstring stdout_path;
     std::wstring stderr_path;
@@ -247,6 +294,8 @@ entry_point() noexcept
       : showHelp{false},
         debug{ false },
         interactive_shell{ false },
+        input_codepage{L"utf-8"},
+        output_codepage{L"utf-8"},
         stdin_path{},
         stdout_path{},
         stderr_path{},
@@ -287,23 +336,50 @@ entry_point() noexcept
       }else if( (!!opt.long_option) && std::wstring{L"stderr"} == opt.long_option ){
         this->stderr_path = value;
         return true;
+      }else if( (!!opt.long_option) && std::wstring{L"input-codepage" } == opt.long_option ){
+        this->input_codepage = value;
+        return true;
+      }else if( (!!opt.long_option) && std::wstring{L"output-codepage" } == opt.long_option ){
+        this->output_codepage = value;
+        return true;
       }
-      
       return false;
     }
   } runtimeOption{};
 
   {
-    constexpr struct optionW opt[] = { {L'h'  , L"help"   , L"show help message"   } ,
-                                       {L'd'  , L"debug"  , L"enable debug flag"   } ,
-                                       {L'i'  , L"interactive" , L"interactive shell" },
-                                       {L'I'  , L"interactive" , L"interactive shell" },
-                                       {L'\0' , L"stdin"  , L"standard input"   , 1} ,
-                                       {L'\0' , L"stdout" , L"standard output"  , 1} ,
-                                       {L'\0' , L"stderr" , L"standard error"   , 1}};
-    
+    constexpr struct optionW opt[] = { {L'h'  , L"help"           , L"show help message"    } ,
+                                       {L'd'  , L"debug"          , L"enable debug flag"    } ,
+                                       {L'i'  , L"interactive"    , L"interactive shell"    } ,
+                                       {L'I'  , L"interactive"    , L"interactive shell"    } ,
+                                       {L'\0' , L"stdin"          , L"standard input"   , 1 } ,
+                                       {L'\0' , L"stdout"         , L"standard output"  , 1 } ,
+                                       {L'\0' , L"stderr"         , L"standard error"   , 1 } ,
+                                       {L'\0' , L"input-codepage" , L"input code page"  , 1 } ,
+                                       {L'\0' , L"output-codepage", L"output code page" , 1 } }; 
+
     std::vector<std::wstring> errors;
     if( wh::ParseCommandLineOption{}( runtimeOption.fileList , opt, runtimeOption , errors ) ){
+      if( runtimeOption.debug ){
+        std::wcout << "enable debug mode" << std::endl;
+        std::wcout << " interactive: " << runtimeOption.interactive_shell << std::endl;
+        std::wcout << " stdin: "
+                   << ( runtimeOption.stdin_path.empty() ?
+                        std::wstring{L"(Console)"} : (L"\"" + runtimeOption.stdin_path + L"\"" ))
+                   << ", input-codepage: " << runtimeOption.input_codepage
+                   << std::endl;
+        
+        std::wcout << L" stdout: "
+                   << (runtimeOption.stdout_path.empty() ?
+                       std::wstring{L"(Console)"} : (L"\"" + runtimeOption.stdout_path + L"\"" ))
+                   << L", output-codepage: " << runtimeOption.output_codepage 
+                   << std::endl;
+
+        std::wcout << L" stderr: "
+                   << (runtimeOption.stderr_path.empty() ?
+                       std::wstring{L"(Console)"} : (L"\"" + runtimeOption.stderr_path + L"\"" ))
+                   << std::endl;
+      }
       if( runtimeOption.showHelp ){
         std::wcout << "Help" << std::endl;
         return EXIT_SUCCESS;
