@@ -6,9 +6,11 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <type_traits>
 #include <tuple>
 
 #include "wh-parse-option.h"
+#include "wh-error-handling.h"
 
 namespace application{
   namespace environment{
@@ -177,6 +179,7 @@ int io_wrap( HANDLE standard_input , HANDLE standard_output,
       const auto lastError{GetLastError()};
       std::ignore = lastError;
       
+      assert( error == INVALID_HANDLE_VALUE );
       error = INVALID_HANDLE_VALUE;
     }else{
       std::wcout << "same file "
@@ -393,5 +396,6 @@ entry_point() noexcept
 int main(int,char*[])
 {
   std::locale::global( std::locale{""} );
+
   return entry_point();
 }
